@@ -1,0 +1,189 @@
+services:
+  backend-api:
+    build:
+      context: .
+      dockerfile: services/backend-api/Dockerfile
+    container_name: fb_api-backend-api
+    env_file:
+      - .env
+    environment:
+      USE_POSTGRES: "true"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      - kafka
+      - postgres
+    ports:
+      - "3000:3000"
+
+  backend-consumer:
+    build:
+      context: .
+      dockerfile: services/backend-api/Dockerfile
+    container_name: fb_api-backend-consumer
+    env_file:
+      - .env
+    environment:
+      USE_POSTGRES: "true"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    command: ["python", "manage.py", "run_kafka_consumer"]
+    depends_on:
+      - kafka
+      - postgres
+
+  webhook-service:
+    build:
+      context: .
+      dockerfile: services/webhook-service/Dockerfile
+    container_name: fb_api-webhook-service
+    env_file:
+      - .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      - kafka
+    ports:
+      - "3001:3001"
+
+  core-service:
+    build:
+      context: .
+      dockerfile: services/core-service/Dockerfile
+    container_name: fb_api-core-service
+    env_file:
+      - .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: fb_api_db
+      POSTGRES_USER: fb_api_user
+      POSTGRES_PASSWORD: fb_api_password
+      AI_PROVIDER: ${AI_PROVIDER:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      SPAM_REPEAT_THRESHOLD: ${SPAM_REPEAT_THRESHOLD:-3}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+      RATE_LIMIT_MAX_MESSAGES: ${RATE_LIMIT_MAX_MESSAGES:-5}
+    depends_on:
+      - kafka
+      - postgres
+    ports:
+      - "3002:3002"
+
+  retry-service:
+    build:
+      context: .
+      dockerfile: services/retry-service/Dockerfile
+    container_name: fb_api-retry-service
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MAX_RETRY: "3"
+    depends_on:
+      - kafka
+    ports:
+      - "3003:3003"
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: fb_api-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: fb_api-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: fb_api-kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: fb_api-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: fb_api-kafka-exporter
+    depends_on:
+      - kafka
+    ports:
+      - "9308:9308"
+    command:
+      - "--kafka.server=kafka:29092"
+
+  postgres:
+    image: postgres:16
+    container_name: fb_api-postgres
+    environment:
+      POSTGRES_DB: fb_api_db
+      POSTGRES_USER: fb_api_user
+      POSTGRES_PASSWORD: fb_api_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: fb_api-prometheus
+    depends_on:
+      - kafka-exporter
+      - retry-service
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: fb_api-alertmanager
+    depends_on:
+      - prometheus
+    env_file:
+      - .env
+    environment:
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK}
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.template.yml:/etc/alertmanager/alertmanager.template.yml
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        sed "s|__SLACK_WEBHOOK_URL__|$$SLACK_WEBHOOK_URL|g" /etc/alertmanager/alertmanager.template.yml > /etc/alertmanager/alertmanager.yml
+        exec /bin/alertmanager --config.file=/etc/alertmanager/alertmanager.yml
+
+volumes:
+  postgres_data:
+  prometheus_data:

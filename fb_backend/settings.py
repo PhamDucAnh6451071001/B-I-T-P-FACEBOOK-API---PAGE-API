@@ -13,7 +13,7 @@ load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = 'django-insecure-f0t!n6zzq%w2b@ht&*@k6=2l1@^!(v_gz9h23hlg7!nw#u5rj9'
 DEBUG = True
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["*"]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -57,12 +57,24 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'fb_backend.wsgi.application'
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+if os.getenv("USE_POSTGRES", "true").lower() == "true":
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.getenv("POSTGRES_DB", "fb_api_db"),
+            "USER": os.getenv("POSTGRES_USER", "fb_api_user"),
+            "PASSWORD": os.getenv("POSTGRES_PASSWORD", "fb_api_password"),
+            "HOST": os.getenv("POSTGRES_HOST", "localhost"),
+            "PORT": os.getenv("POSTGRES_PORT", "5432"),
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -88,11 +100,26 @@ STATIC_URL = 'static/'
 
 FB_GRAPH_VERSION = os.getenv("FB_GRAPH_VERSION", "v25.0")
 FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN")
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_GROUP_ID = os.getenv("KAFKA_GROUP_ID", "backend-api-group")
+FACEBOOK_BREAKER_FAILURE_THRESHOLD = int(os.getenv("FACEBOOK_BREAKER_FAILURE_THRESHOLD", "5"))
+FACEBOOK_BREAKER_RECOVERY_SECONDS = int(os.getenv("FACEBOOK_BREAKER_RECOVERY_SECONDS", "30"))
+
+AI_PROVIDER = os.getenv("AI_PROVIDER", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN", "")
+SPAM_REPEAT_THRESHOLD = int(os.getenv("SPAM_REPEAT_THRESHOLD", "3"))
+RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+RATE_LIMIT_MAX_MESSAGES = int(os.getenv("RATE_LIMIT_MAX_MESSAGES", "5"))
 
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
-    'DEFAULT_AUTHENTICATION_CLASSES': [],
-    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.AllowAny'],
+    'DEFAULT_AUTHENTICATION_CLASSES': ['pageapi.auth.AdminTokenAuthentication'],
+    'DEFAULT_PERMISSION_CLASSES': ['pageapi.auth.IsAdminUser'],
+    'EXCEPTION_HANDLER': 'pageapi.api_responses.custom_exception_handler',
 }
 
 SPECTACULAR_SETTINGS = {
@@ -103,3 +130,20 @@ SPECTACULAR_SETTINGS = {
 }
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "structured": {
+            "format": "%(asctime)s %(levelname)s %(name)s %(message)s"
+        }
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "structured"}
+    },
+    "loggers": {
+        "backend_api": {"handlers": ["console"], "level": "INFO"},
+        "backend_api.kafka": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    },
+}
